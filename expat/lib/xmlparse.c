@@ -4159,6 +4159,16 @@ freeBindings(XML_Parser parser, BINDING *bindings) {
   }
 }
 
+/* Fail closed when the attribute slot count cannot be reported
+   through the int based XML_GetSpecifiedAttributeCount API.
+   Split out for direct unit testing under XML_TESTING. */
+XML_NONTESTING_STATIC enum XML_Error
+checkStoreAttsCountFitsInInt(size_t attIndex) {
+  if (attIndex > (size_t)INT_MAX)
+    return XML_ERROR_NO_MEMORY;
+  return XML_ERROR_NONE;
+}
+
 /* Precondition: all arguments must be non-NULL;
    Purpose:
    - normalize attributes
@@ -4174,9 +4184,9 @@ storeAtts(XML_Parser parser, const ENCODING *enc, const char *attStr,
           TAG_NAME *tagNamePtr, BINDING **bindingsPtr,
           enum XML_Account account) {
   DTD *const dtd = parser->m_dtd; /* save one level of indirection */
-  int attIndex = 0;
+  size_t attIndex = 0;
   XML_Char *uri;
-  int nPrefixes = 0;
+  size_t nPrefixes = 0;
   BINDING *binding;
   const XML_Char *localPart;
 
@@ -4330,11 +4340,17 @@ storeAtts(XML_Parser parser, const ENCODING *enc, const char *attStr,
   }
 
   /* set-up for XML_GetSpecifiedAttributeCount and XML_GetIdAttributeIndex */
-  parser->m_nSpecifiedAtts = attIndex;
+  /* Detect and prevent integer overflow. */
+  {
+    const enum XML_Error rc = checkStoreAttsCountFitsInInt(attIndex);
+    if (rc != XML_ERROR_NONE)
+      return rc;
+  }
+  parser->m_nSpecifiedAtts = (int)attIndex;
   if (elementType->idAtt && (elementType->idAtt->name)[-1]) {
-    for (int i = 0; i < attIndex; i += 2)
+    for (size_t i = 0; i < attIndex; i += 2)
       if (appAtts[i] == elementType->idAtt->name) {
-        parser->m_idAttIndex = i;
+        parser->m_idAttIndex = (int)i;
         break;
       }
   } else
@@ -4367,7 +4383,7 @@ storeAtts(XML_Parser parser, const ENCODING *enc, const char *attStr,
 
   /* expand prefixed attribute names, check for duplicates,
      and clear flags that say whether attributes were specified */
-  int i = 0;
+  size_t i = 0;
   if (nPrefixes) {
     unsigned int j; /* hash table index */
     unsigned long version = parser->m_nsAttsVersion;

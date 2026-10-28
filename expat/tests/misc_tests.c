@@ -56,6 +56,7 @@
 #include "expat_config.h"
 
 #include <assert.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
@@ -1137,6 +1138,111 @@ START_TEST(test_misc_external_entity_empty_first_chunk) {
 }
 END_TEST
 
+#if defined(__GNUC__) || defined(__clang__)
+extern enum XML_Error checkStoreAttsCountFitsInInt(size_t attIndex)
+    __attribute__((weak));
+#else
+extern enum XML_Error checkStoreAttsCountFitsInInt(size_t attIndex);
+#endif
+
+typedef struct {
+  XML_Parser parser;
+  int specifiedCount;
+  int firstNameOk;
+  int firstValueOk;
+  int lastNameOk;
+  int lastValueOk;
+} StoreAttsCountData;
+
+static void XMLCALL
+storeatts_count_start_element(void *userData, const XML_Char *name,
+                              const XML_Char **atts) {
+  StoreAttsCountData *const data = userData;
+  UNUSED_P(name);
+  // NOTE: each attribute/value pair counts as 2, see expat.h
+  data->specifiedCount = XML_GetSpecifiedAttributeCount(data->parser);
+  if (data->specifiedCount > 0) {
+    data->firstNameOk = strcmp(atts[0], XCS("a0000")) == 0;
+    data->firstValueOk = strcmp(atts[1], XCS("v0000")) == 0;
+    data->lastNameOk
+        = strcmp(atts[data->specifiedCount - 2], XCS("a4999")) == 0;
+    data->lastValueOk
+        = strcmp(atts[data->specifiedCount - 1], XCS("v4999")) == 0;
+  }
+}
+
+START_TEST(test_misc_storeatts_overflow_guard) {
+  // Speed up the test, chunk size expected not to matter in this test
+  if (g_chunkSize != 0)
+    return;
+
+#if defined(__GNUC__) || defined(__clang__)
+  // With the lib fix reverted the helper is gone (weak NULL).
+  if (checkStoreAttsCountFitsInInt == NULL)
+    fail("storeAtts overflow guard missing (fix reverted?)");
+#endif
+
+  // Unit check of the fail closed guard at the INT_MAX boundary.
+  // A single start tag with more than INT_MAX slots (over 2^30
+  // attributes) needs a multi-gigabyte document, so the boundary
+  // itself is checked directly here instead of parsing that much.
+  assert_true(checkStoreAttsCountFitsInInt(0) == XML_ERROR_NONE);
+  assert_true(checkStoreAttsCountFitsInInt((size_t)INT_MAX)
+              == XML_ERROR_NONE);
+  assert_true(checkStoreAttsCountFitsInInt((size_t)INT_MAX + 1)
+              == XML_ERROR_NO_MEMORY);
+  assert_true(checkStoreAttsCountFitsInInt(SIZE_MAX)
+              == XML_ERROR_NO_MEMORY);
+
+  // Functional check that normal counting still works and forces
+  // growth of the atts buffer (INIT_ATTS_SIZE is 16).
+  const int attrCount = 5000;
+  const int perAttrChars = 14; // " aNNNN='vNNNN'"
+  const int docLen = 2 + attrCount * perAttrChars + 2 + 1; // "<r" .. "/>" NUL
+  char *const doc = malloc((size_t)docLen);
+  assert_true(doc != NULL);
+  memcpy(doc, "<r", 2);
+  int pos = 2;
+  for (int i = 0; i < attrCount; i++) {
+    doc[pos++] = ' ';
+    doc[pos++] = 'a';
+    doc[pos++] = (char)('0' + (i / 1000) % 10);
+    doc[pos++] = (char)('0' + (i / 100) % 10);
+    doc[pos++] = (char)('0' + (i / 10) % 10);
+    doc[pos++] = (char)('0' + i % 10);
+    doc[pos++] = '=';
+    doc[pos++] = '\'';
+    doc[pos++] = 'v';
+    doc[pos++] = (char)('0' + (i / 1000) % 10);
+    doc[pos++] = (char)('0' + (i / 100) % 10);
+    doc[pos++] = (char)('0' + (i / 10) % 10);
+    doc[pos++] = (char)('0' + i % 10);
+    doc[pos++] = '\'';
+  }
+  memcpy(doc + pos, "/>", 2);
+  pos += 2;
+  doc[pos] = '\0';
+  assert_true(pos + 1 == docLen);
+
+  XML_Parser parser = XML_ParserCreate(NULL);
+  assert_true(parser != NULL);
+  StoreAttsCountData data = {parser, -1, 0, 0, 0, 0};
+  XML_SetUserData(parser, &data);
+  XML_SetStartElementHandler(parser, storeatts_count_start_element);
+  assert_true(_XML_Parse_SINGLE_BYTES(parser, doc, pos,
+                                      /*isFinal=*/XML_TRUE)
+              == XML_STATUS_OK);
+  XML_ParserFree(parser);
+  free(doc);
+
+  assert_true(data.specifiedCount == 2 * attrCount);
+  assert_true(data.firstNameOk);
+  assert_true(data.firstValueOk);
+  assert_true(data.lastNameOk);
+  assert_true(data.lastValueOk);
+}
+END_TEST
+
 void
 make_miscellaneous_test_case(Suite *s) {
   TCase *tc_misc = tcase_create("miscellaneous tests");
@@ -1178,6 +1284,7 @@ make_miscellaneous_test_case(Suite *s) {
   tcase_add_test(tc_misc, test_misc_input_2gb);
   tcase_add_test(tc_misc, test_misc_low_surrogate_mozilla_bug_2053153);
   tcase_add_test(tc_misc, test_misc_storeatts_attssize_allocation);
+  tcase_add_test(tc_misc, test_misc_storeatts_overflow_guard);
   tcase_add_test(tc_misc, test_misc_start_doctype_decl_handler_reset);
   tcase_add_test(tc_misc, test_misc_external_entity_empty_first_chunk);
 }
