@@ -3537,6 +3537,12 @@ externalEntityInitProcessor2(XML_Parser parser, const char *start,
     }
     parser->m_eventPtr = start;
     return XML_ERROR_PARTIAL_CHAR;
+  case XML_TOK_NONE:
+    /* No bytes to inspect, so encoding detection has not run yet; wait
+       for more input rather than entering the content processor with
+       a stale encoding. */
+    *endPtr = start;
+    return XML_ERROR_NONE;
   }
   parser->m_processor = externalEntityInitProcessor3;
   return externalEntityInitProcessor3(parser, start, end, endPtr);

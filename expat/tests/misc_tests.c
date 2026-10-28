@@ -1116,6 +1116,27 @@ START_TEST(test_misc_storeatts_attssize_allocation) {
 }
 END_TEST
 
+START_TEST(test_misc_external_entity_empty_first_chunk) {
+  /* An empty first chunk yields XML_TOK_NONE in
+     externalEntityInitProcessor2, which must wait for more input rather
+     than committing to the content processor before encoding detection
+     has seen any bytes (DEBIAN-CVE-2026-117610). */
+  XML_Parser parser = XML_ParserCreate(NULL);
+  assert_true(parser != NULL);
+  XML_Parser extParser
+      = XML_ExternalEntityParserCreate(parser, XCS("entity123"), NULL);
+  assert_true(extParser != NULL);
+
+  if (XML_Parse(extParser, "", 0, XML_FALSE) != XML_STATUS_OK)
+    xml_failure(extParser);
+  if (XML_Parse(extParser, "<r/>", 4, XML_TRUE) != XML_STATUS_OK)
+    xml_failure(extParser);
+
+  XML_ParserFree(extParser);
+  XML_ParserFree(parser);
+}
+END_TEST
+
 void
 make_miscellaneous_test_case(Suite *s) {
   TCase *tc_misc = tcase_create("miscellaneous tests");
@@ -1158,4 +1179,5 @@ make_miscellaneous_test_case(Suite *s) {
   tcase_add_test(tc_misc, test_misc_low_surrogate_mozilla_bug_2053153);
   tcase_add_test(tc_misc, test_misc_storeatts_attssize_allocation);
   tcase_add_test(tc_misc, test_misc_start_doctype_decl_handler_reset);
+  tcase_add_test(tc_misc, test_misc_external_entity_empty_first_chunk);
 }
